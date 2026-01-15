@@ -1,0 +1,597 @@
+openapi: 3.0.3
+info:
+  title: DataForge API
+  description: Database query tool API for connecting to databases, executing SQL queries, and exporting results
+  version: 1.0.0
+  contact:
+    name: DataForge Team
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development server
+  - url: https://api.dataforge.example.com/api/v1
+    description: Production server
+
+tags:
+  - name: databases
+    description: Database connection management
+  - name: queries
+    description: SQL query execution
+  - name: natural-language
+    description: Natural language to SQL generation
+  - name: exports
+    description: Query result exports
+
+paths:
+  /dbs/:
+    get:
+      summary: List all database connections
+      description: Retrieve a list of all added database connections with their metadata
+      operationId: listDatabases
+      tags:
+        - databases
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseListResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dbs/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: Unique database connection name
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+    
+    get:
+      summary: Get database details
+      description: Retrieve database connection information and cached metadata
+      operationId: getDatabase
+      tags:
+        - databases
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseConnection'
+        '404':
+          description: Database not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    put:
+      summary: Add or update database connection
+      description: Add a new database connection or update an existing one. Automatically retrieves and caches metadata.
+      operationId: addDatabase
+      tags:
+        - databases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseCreateRequest'
+      responses:
+        '200':
+          description: Database connection added/updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseConnection'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error (connection failed, metadata retrieval failed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dbs/{name}/query:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: Database connection name
+        schema:
+          type: string
+    
+    post:
+      summary: Execute SQL query
+      description: |
+        Execute a SQL query against the specified database. 
+        
+        Safety features:
+        - Only SELECT statements allowed
+        - Automatic LIMIT 1000 added if missing
+        - Syntax validation before execution
+      operationId: executeQuery
+      tags:
+        - queries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult'
+        '400':
+          description: Invalid SQL or forbidden statement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidSyntax:
+                  summary: SQL syntax error
+                  value:
+                    error: "INVALID_SQL_SYNTAX"
+                    message: "SQL syntax error at position 15"
+                    details:
+                      - field: "sql"
+                        message: "Expected SELECT keyword"
+                        code: "SYNTAX_ERROR"
+                forbiddenStatement:
+                  summary: Non-SELECT statement
+                  value:
+                    error: "FORBIDDEN_SQL_STATEMENT"
+                    message: "Only SELECT statements are allowed"
+                    details:
+                      - field: "sql"
+                        message: "Detected DELETE statement"
+                        code: "FORBIDDEN_STATEMENT"
+        '404':
+          description: Database not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Query execution error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dbs/{name}/query/natural:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: Database connection name
+        schema:
+          type: string
+    
+    post:
+      summary: Generate SQL from natural language
+      description: |
+        Generate SQL query from natural language description using LLM.
+        Uses database metadata as context for accurate table/column names.
+      operationId: generateSQLFromNaturalLanguage
+      tags:
+        - natural-language
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NaturalLanguageRequest'
+      responses:
+        '200':
+          description: SQL generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NaturalLanguageResponse'
+        '400':
+          description: Invalid prompt or ambiguous request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Database not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: LLM generation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dbs/{name}/export:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: Database connection name
+        schema:
+          type: string
+    
+    post:
+      summary: Export query results
+      description: |
+        Export query results to CSV, Excel, or JSON format.
+        Returns a download URL that expires after 15 minutes.
+      operationId: exportQueryResults
+      tags:
+        - exports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRequest'
+      responses:
+        '200':
+          description: Export generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+        '400':
+          description: Invalid export request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Database not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Export generation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    DatabaseCreateRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: Database connection URL
+          example: "postgresql://user:password@localhost:5432/mydb"
+    
+    DatabaseConnection:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Internal database ID
+        name:
+          type: string
+          description: Unique name for this database connection
+        connectionUrl:
+          type: string
+          description: Database connection URL (password masked)
+        databaseType:
+          type: string
+          enum: [postgresql, mysql, sqlite]
+          description: Database type
+        createdAt:
+          type: string
+          format: date-time
+          description: When this connection was first added
+        updatedAt:
+          type: string
+          format: date-time
+          description: When this connection was last modified
+        lastConnectedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When we last successfully connected
+        metadata:
+          $ref: '#/components/schemas/DatabaseMetadata'
+          nullable: true
+    
+    DatabaseListResponse:
+      type: object
+      required:
+        - databases
+        - total
+      properties:
+        databases:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatabaseConnection'
+        total:
+          type: integer
+          description: Total number of databases
+    
+    DatabaseMetadata:
+      type: object
+      required:
+        - schemaName
+        - tables
+        - views
+        - retrievedAt
+        - tableCount
+        - viewCount
+      properties:
+        schemaName:
+          type: string
+          description: Database schema name
+          default: "public"
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/TableMetadata'
+        views:
+          type: array
+          items:
+            $ref: '#/components/schemas/TableMetadata'
+        retrievedAt:
+          type: string
+          format: date-time
+          description: When this metadata was retrieved
+        tableCount:
+          type: integer
+          description: Total number of tables
+        viewCount:
+          type: integer
+          description: Total number of views
+    
+    TableMetadata:
+      type: object
+      required:
+        - name
+        - type
+        - columns
+      properties:
+        name:
+          type: string
+          description: Table or view name
+        type:
+          type: string
+          enum: [TABLE, VIEW, MATERIALIZED VIEW]
+          description: Object type
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/ColumnMetadata'
+        rowCount:
+          type: integer
+          nullable: true
+          description: Approximate row count
+    
+    ColumnMetadata:
+      type: object
+      required:
+        - name
+        - dataType
+        - isNullable
+        - ordinalPosition
+      properties:
+        name:
+          type: string
+          description: Column name
+        dataType:
+          type: string
+          description: SQL data type
+        isNullable:
+          type: boolean
+          description: Whether column allows NULL
+        columnDefault:
+          type: string
+          nullable: true
+          description: Default value expression
+        characterMaximumLength:
+          type: integer
+          nullable: true
+          description: Max length for character types
+        ordinalPosition:
+          type: integer
+          description: Column position in table (1-based)
+    
+    QueryRequest:
+      type: object
+      required:
+        - sql
+      properties:
+        sql:
+          type: string
+          minLength: 1
+          description: SQL query to execute (SELECT only)
+          example: "SELECT * FROM users LIMIT 10"
+    
+    QueryResult:
+      type: object
+      required:
+        - columns
+        - rows
+        - rowCount
+        - executionTimeMs
+      properties:
+        columns:
+          type: array
+          items:
+            type: string
+          description: Column names in result set
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+          description: Result rows as arrays of values
+        rowCount:
+          type: integer
+          description: Number of rows returned
+        executionTimeMs:
+          type: integer
+          description: Query execution time in milliseconds
+        transformedSql:
+          type: string
+          nullable: true
+          description: Actual SQL executed (with LIMIT if added)
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Non-fatal warnings
+    
+    NaturalLanguageRequest:
+      type: object
+      required:
+        - prompt
+      properties:
+        prompt:
+          type: string
+          minLength: 5
+          description: Natural language description of desired query
+          example: "Show all users created in the last 30 days"
+    
+    NaturalLanguageResponse:
+      type: object
+      required:
+        - sql
+        - explanation
+      properties:
+        sql:
+          type: string
+          description: Generated SQL query
+        explanation:
+          type: string
+          description: Human-readable explanation
+        tablesUsed:
+          type: array
+          items:
+            type: string
+          description: Tables referenced in query
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          nullable: true
+          description: Confidence score (0-1)
+    
+    ExportRequest:
+      type: object
+      required:
+        - format
+        - queryResult
+      properties:
+        format:
+          type: string
+          enum: [csv, excel, json]
+          description: Export file format
+        queryResult:
+          $ref: '#/components/schemas/QueryResult'
+        filename:
+          type: string
+          nullable: true
+          description: Custom filename (without extension)
+    
+    ExportResponse:
+      type: object
+      required:
+        - downloadUrl
+        - filename
+        - format
+        - sizeBytes
+        - expiresAt
+      properties:
+        downloadUrl:
+          type: string
+          format: uri
+          description: Temporary URL to download file
+        filename:
+          type: string
+          description: Generated filename with extension
+        format:
+          type: string
+          enum: [csv, excel, json]
+          description: File format
+        sizeBytes:
+          type: integer
+          description: File size in bytes
+        expiresAt:
+          type: string
+          format: date-time
+          description: When download URL expires
+    
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error type or category
+        message:
+          type: string
+          description: Primary error message
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+          nullable: true
+          description: Additional error details
+        requestId:
+          type: string
+          nullable: true
+          description: Request ID for debugging
+    
+    ErrorDetail:
+      type: object
+      required:
+        - message
+        - code
+      properties:
+        field:
+          type: string
+          nullable: true
+          description: Field name that caused error
+        message:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+
+security: []  # No authentication required per constitution
