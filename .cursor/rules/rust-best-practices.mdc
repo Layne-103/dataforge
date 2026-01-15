@@ -1,0 +1,296 @@
+# Rust Best Practices
+
+You are an expert Rust developer. Follow these strict guidelines when writing Rust code:
+
+## Error Handling
+
+- **Applications**: Use `anyhow` for application-level error handling
+  - Use `anyhow::Result<T>` for function return types
+  - Use `.context()` or `.with_context()` to add context to errors
+  - Use `anyhow::bail!()` for early returns with errors
+  
+- **Libraries**: Use `thiserror` for library error types
+  - Define custom error enums with `#[derive(thiserror::Error)]`
+  - Provide meaningful error messages with `#[error("...")]`
+  - Use `#[from]` attribute for automatic error conversions
+
+```rust
+// Application example (anyhow)
+use anyhow::{Context, Result};
+
+fn read_config() -> Result<Config> {
+    let content = std::fs::read_to_string("config.toml")
+        .context("Failed to read config file")?;
+    toml::from_str(&content)
+        .context("Failed to parse config")
+}
+
+// Library example (thiserror)
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum MyError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Parse error: {0}")]
+    Parse(String),
+}
+```
+
+## Concurrency & Synchronization
+
+- **Prefer channels over shared state**: Use `std::sync::mpsc` or `tokio::sync::mpsc` for communication between threads/tasks
+- Use channels for:
+  - Producer-consumer patterns
+  - Actor-like patterns
+  - Task coordination
+  - Event broadcasting (with `tokio::sync::broadcast`)
+  
+- Only use mutexes/locks when:
+  - Shared state is unavoidable
+  - Multiple readers/writers need direct access
+  - Performance profiling shows channels are a bottleneck
+
+```rust
+// Prefer this (channel-based)
+use std::sync::mpsc;
+
+let (tx, rx) = mpsc::channel();
+std::thread::spawn(move || {
+    tx.send(compute_result()).unwrap();
+});
+let result = rx.recv().unwrap();
+
+// Async version with tokio
+use tokio::sync::mpsc;
+
+let (tx, mut rx) = mpsc::channel(32);
+tokio::spawn(async move {
+    tx.send(compute_result()).await.unwrap();
+});
+let result = rx.recv().await.unwrap();
+```
+
+## Async Runtime
+
+- **Use Tokio** as the async runtime
+- Add to `Cargo.toml`:
+  ```toml
+  tokio = { version = "1.0", features = ["full"] }
+  ```
+- Use `#[tokio::main]` for the main function
+- Use `tokio::spawn` for spawning tasks
+- Prefer `tokio::sync` primitives over `std::sync` in async code
+
+```rust
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let handle = tokio::spawn(async {
+        // async work
+    });
+    
+    handle.await?;
+    Ok(())
+}
+```
+
+## Web & gRPC Frameworks
+
+- **Web applications**: Use `axum` for HTTP servers
+  - Leverage extractors for request handling
+  - Use typed state with `State<T>`
+  - Implement middleware as layers
+  
+- **gRPC**: Use `tonic` for gRPC services
+  - Define services in `.proto` files
+  - Use `tonic-build` in `build.rs`
+  - Implement streaming when appropriate
+
+```rust
+// Axum example
+use axum::{
+    routing::{get, post},
+    Router, Json, extract::State,
+};
+
+async fn handler() -> Json<Response> {
+    Json(Response { message: "Hello".into() })
+}
+
+let app = Router::new()
+    .route("/", get(handler))
+    .route("/api", post(api_handler));
+
+// Tonic example
+use tonic::{transport::Server, Request, Response, Status};
+
+#[tonic::async_trait]
+impl MyService for MyServiceImpl {
+    async fn call(&self, request: Request<Req>) -> Result<Response<Resp>, Status> {
+        // implementation
+    }
+}
+```
+
+## Type Conversions - Always Use Standard Traits
+
+**CRITICAL**: Implement standard conversion traits whenever converting between types:
+
+- **`From<T>`**: For infallible conversions (never fails)
+  - Automatically provides `Into<T>`
+  - Use when conversion always succeeds
+
+- **`TryFrom<T>`**: For fallible conversions (can fail)
+  - Automatically provides `TryInto<T>`
+  - Use when conversion can fail
+  - Return a `Result` with appropriate error type
+
+- **`FromStr`**: For parsing from strings
+  - Enables `.parse()` method
+  - Always returns `Result<Self, Self::Err>`
+
+- **`Display`** and **`ToString`**: For converting to strings
+  - Implement `Display` (provides `ToString` automatically)
+
+```rust
+// From - infallible conversion
+impl From<UserId> for i64 {
+    fn from(user_id: UserId) -> Self {
+        user_id.0
+    }
+}
+
+// Usage: let id: i64 = user_id.into();
+
+// TryFrom - fallible conversion
+use std::convert::TryFrom;
+
+impl TryFrom<i64> for UserId {
+    type Error = anyhow::Error;
+    
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value > 0 {
+            Ok(UserId(value))
+        } else {
+            anyhow::bail!("User ID must be positive")
+        }
+    }
+}
+
+// Usage: let user_id = UserId::try_from(42)?;
+
+// FromStr - parsing from strings
+use std::str::FromStr;
+
+impl FromStr for UserId {
+    type Err = anyhow::Error;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value: i64 = s.parse()
+            .context("Failed to parse user ID")?;
+        UserId::try_from(value)
+    }
+}
+
+// Usage: let user_id: UserId = "42".parse()?;
+
+// Display - converting to string
+use std::fmt;
+
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "UserId({})", self.0)
+    }
+}
+
+// Usage: println!("{}", user_id);
+```
+
+**Never** write manual conversion functions like `to_x()` or `from_x()` when these traits can be implemented instead.
+
+## Safety
+
+- **NO `unsafe` code** unless absolutely necessary and explicitly approved
+- If `unsafe` is unavoidable:
+  - Document why it's needed
+  - Document invariants that must be upheld
+  - Encapsulate in safe APIs
+  - Add detailed comments explaining safety
+
+```rust
+// Avoid this unless absolutely necessary
+// unsafe { ... }
+
+// If required, document thoroughly:
+/// # Safety
+/// 
+/// This function is safe when:
+/// - `ptr` is valid and properly aligned
+/// - `ptr` points to initialized memory
+/// - No other references exist to this memory
+unsafe fn dangerous_operation(ptr: *mut u8) {
+    // implementation
+}
+```
+
+## Additional Best Practices
+
+### Project Structure
+- Use workspaces for multi-crate projects
+- Separate binary crates (`src/main.rs`) from library crates (`src/lib.rs`)
+- Keep modules focused and single-purpose
+
+### Error Propagation
+- Use `?` operator for error propagation
+- Avoid `.unwrap()` and `.expect()` in production code
+- Use `.expect()` only when the invariant is guaranteed by logic
+
+### Testing
+- Write unit tests in the same file with `#[cfg(test)]`
+- Write integration tests in `tests/` directory
+- Use `tokio::test` for async tests
+
+### Dependencies
+```toml
+[dependencies]
+# Core async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"      # For applications
+thiserror = "1.0"   # For libraries
+
+# Web frameworks
+axum = "0.8"      # HTTP server
+
+# gRPC 
+prost = "0.13"
+tonic = "0.11"    # gRPC
+
+# Optional but recommended serde for serialization and deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# logging
+tracing = "0.1"   # Structured logging
+tracing-subscriber = "0.3"
+
+
+```
+
+### Code Style
+- Run `cargo fmt` before committing
+- Run `cargo clippy` and fix all warnings
+- Use meaningful variable and function names
+- Prefer explicit types when it improves readability
+- Keep functions small and focused
+
+### Documentation
+- Document public APIs with `///` doc comments
+- Include examples in documentation
+- Document panics, errors, and safety requirements
+
+---
+
+**Remember**: Write idiomatic Rust that leverages the type system and ownership model. Prioritize safety, clarity, and correctness over cleverness.
+
