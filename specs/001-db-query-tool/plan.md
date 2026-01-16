@@ -14,7 +14,7 @@ The Database Query Tool is a web application that enables users to connect to da
 **Language/Version**: Python 3.13+ (backend), TypeScript with strict mode (frontend)
 **Primary Dependencies**: 
 - Backend: FastAPI, Pydantic, sqlglot, OpenAI SDK, SQLAlchemy, asyncpg
-- Frontend: React 18+, Refine 5, Tailwind CSS, Ant Design, Monaco Editor
+- Frontend: React 19+, Refine 5, Tailwind CSS 4, Ant Design 5, Monaco Editor
 
 **Storage**: SQLite database at `~/.dataforge.db` for storing database connections and metadata cache
 **Testing**: pytest (backend), Vitest + React Testing Library (frontend)
